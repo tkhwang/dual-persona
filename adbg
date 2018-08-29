@@ -1,0 +1,408 @@
+#!/usr/bin/env bash
+
+arg1=$1
+arg2=$2
+arg3=$3
+argc=$#
+
+PLATFORM="$OSTYPE"
+VERSION=0.4
+
+TEMP_BASE_DIR=/data/local/tmp
+# timestamp in bash
+# http://www.cyberciti.biz/faq/linux-unix-formatting-dates-for-display/
+TIMESTAMP=$(date +"%Y_%m%d_%H%M")
+TEMP_DIR=$TEMP_BASE_DIR/$TIMESTAMP
+
+function f_print_banner() {
+    echo "+-------------------------------------------------------------------+"
+    echo "                                         for T-Persona Premium "
+    echo "   _____ ____  _____                                           "
+    echo "  |  _  |    \| __  |___    Legacy : PC <=> HostOS <=> GuestOS "
+    echo "  |     |  |  | __ -| . |   adbg   : PC <============> GuestOS "
+    echo "  |__|__|____/|_____|_  |   "
+    echo "                    |___|   $PLATFORM:$TIMESTAMP"
+    echo "+-------------------------------------------------------------------+"
+}
+
+function f_print_usage() {
+    echo "adbg version = $VERSION"
+    echo ""
+    echo " adbg init            - adb setup for remote GuestOS."
+    echo " adbg command         - syntax is the same as legacy adb."
+    echo ""
+    echo "device commands:"
+    echo " adbg logcat          - View GuestOS logcat."
+    echo " adbg logcat log      - View and save GuestOS logcat."
+    echo " adbg logcat dual     - View HostOS and GuestOS logcat."
+    echo " adbg logcat dual log - View and save HostOS and GuestOS logcat."
+    echo ""
+    echo " adbg install         - Push this package file to the device and install it."
+    echo " adbg push <local> <remote>   - copy file/dir to device."
+    echo " adbg pull <remote> [<local>] - copy file/dir from device."
+    echo ""
+    echo " adbg root host       - Add some root related stuff."
+}
+
+function f_which_platform() {
+    echo " $PLATFORM now !"
+}
+
+function f_logcatColor() {
+    if hash logcat-color 2>/dev/null; then
+        logcat-color "$@"
+    else
+        adb logcat "$@"
+    fi
+}
+
+function f_create_temp_folder() {
+    echo "[+] Create temp folder $TEMP_DIR in HostOS"
+    adb shell mkdir $TEMP_DIR
+}
+
+function f_push_to_temp_folder() {
+    echo "[+] Push $1 to temp folder $TEMP_DIR in HostOS"
+    adb push $1 $TEMP_DIR
+}
+
+# f_pullDirFromTo( src , dst )
+function f_pullDirFromTo() {
+    PULL_DIR_BASE=$TEMP_BASE_DIR/pullDirFromTo
+    adb shell mkdir $PULL_DIR_BASE
+    adb shell mkdir $PULL_DIR_BASE/$2
+
+}
+
+function f_analyze_argFile() {
+    # http://stackoverflow.com/questions/965053/extract-filename-and-extension-in-bash/965072#965072
+    argFilename=$(basename "$1")
+    argFileNameOnly="${argFilename%.*}"
+    argExt="${argFilename##*.}"
+}
+
+function f_getTerminal() {
+    if [ $PLATFORM = 'linux-gnu' ]; then
+        return 'x-terminal-emulator'
+#    elif [ $PLATFORM = 'darwin13' ]; then
+#        return 'open -a Terminal'
+    else
+        echo "[-] Not supporting platform."
+    fi
+}
+
+function f_common() {
+    echo -e "[*] Wait-for-device connection.\n"
+#    adb wait-for-device
+}
+
+function f_exit() {
+    # TODO : quick and dirty remove temp dir. Need to check whether the folder exists.
+#    echo "[*] EXIT : remove temp dir and exits."
+    adb shell \rm -rf $TEMP_DIR > /dev/null 2>&1
+    exit
+}
+
+# Intro. Run w/o argument
+if [ $argc -lt 1 ]; then
+    f_print_banner
+    f_print_usage
+    exit
+fi
+
+# Here we go.
+f_common
+
+if [ $arg1 = 'init' ]; then
+    echo "[*] adbg init"
+    echo -e "\nFor best connection, GuestOS should be awakened."
+    echo -e "Please turn LCD on before the connection."
+    echo -e "\nPress Enter to continue..."
+    read dummy
+
+    echo -e "\n[*] Device for HostOS"
+    adb devices
+
+    echo "[*] adb connect via TcpIp for GuestOS."
+    adb shell adb connect 10.23.0.3:5553
+
+    echo -e "\n[*] Launch another window for GuestOS ADB shell."
+    echo -e "\nPress Enter to continue..."
+    read dummy
+
+    if [ $PLATFORM = 'linux-gnu' ]; then
+        echo "[+] Launch HostOS logcat."
+        x-terminal-emulator -T HostOS  -e "adb shell adb connect 10.23.0.3:5553; adb shell" &
+    elif [ $PLATFORM = 'darwin13' ]; then
+        echo "[+] Launch HostOS logcat."
+        osascript -e 'tell application "Terminal" to do script "adb shell adb connect 10.23.0.3:5553; adb shell"'
+    elif [ $PLATFORM = 'cygwin' ]; then
+        echo "[+] Launch HostOS logcat."
+        mintty.exe -t ADB_SHELL_in_HostOS -e ./.run_hostos_adb_shell.sh &
+    else
+        echo "[-] Not supporting platform (Linux, MAC OS X, Cygwin)"
+    fi
+
+    echo -e "\n[*] Type : adb shell in new terminal."
+    echo "Press Enter to continue..."
+    read dummy
+
+    echo "[*] Check ADB connections."
+    echo "Press Enter to continue..."
+    read dummy
+    echo "[*] HostOS =>"
+    adb devices
+    echo "[*] GuestOS =>"
+    adb shell adb devices
+
+    echo -e "\n% Manual Step:"
+    echo "PC    > adb shell"
+    echo "HostOS> adb connect 10.23.0.3:5553"
+    echo "HostOS> adb shell"
+    echo "GuestOS>"
+fi
+
+# INSTALL
+if [ $arg1 = 'install' ]; then
+
+    if [ $argc -lt 2 ]; then
+        echo "[-] INSTALL : apk is missing."
+        echo "    adbg install APK_NAME"
+        f_exit
+    else
+        echo "[+] adbg install $2"
+    fi
+
+    f_analyze_argFile $2
+    f_create_temp_folder
+    f_push_to_temp_folder $2
+
+    echo "[+] INSTALL : install $apkFilename to GuestOS"
+    adb shell adb install -r $TEMP_DIR/$argFilename
+
+    echo "[+] INSTALL done."
+fi
+
+# PUSH
+if [ $arg1 = 'push' ]; then
+    if [ $argc -lt 3 ]; then
+        echo "[-] adbg push <local> <remote>"
+    else
+        echo "[+] adbg push $2 $3"
+    fi
+    f_analyze_argFile $2
+    f_create_temp_folder
+    f_push_to_temp_folder $2
+
+    echo "[+] Push $argFilename from HostOS to GuestOS."
+    adb shell adb push $TEMP_DIR/$argFilename $3
+fi
+
+# PULL
+if [ $arg1 = 'pull' ]; then
+    if [ $argc -le 3 ]; then
+        echo "[+] adbg pull $2 $3"
+    else
+        echo "[-] adbg pull <remote> [<local>]"
+    fi
+    f_analyze_argFile $2
+    f_create_temp_folder
+
+    echo "[+] Pull $argFilename from GuestOS to HostOS."
+    adb shell adb pull $2 $TEMP_DIR/$argFilename
+
+    echo "[+] Pull $argFilename from HostOS to Host."
+    adb pull $TEMP_DIR/$argFilename
+
+    echo "[+] adbg pull done."
+fi
+
+# EXTRACT
+if [ $arg1 = 'extract' ]; then
+    echo "[+] adbg extract"
+    EXTRACT_BASE_DIR=$TEMP_BASE_DIR/system
+
+    EXTRACT_APP_DIR=$EXTRACT_BASE_DIR/app
+    EXTRACT_PRIV_APP_DIR=$EXTRACT_BASE_DIR/priv-app
+    EXTRACT_FRAMEWORK_DIR=$EXTRACT_BASE_DIR/framework
+
+    echo "[+] Create temp $EXTRACT_BASE_DIR folder in HostOS."
+fi
+
+# LOGCAT
+if [ $arg1 = 'logcat' ]; then
+
+    echo "  adbg logcat          - View GuestOS logcat."
+    echo "  adbg logcat log      - View and save GuestOS logcat."
+    echo "  adbg logcat dual     - View HostOS and GuestOS logcat."
+    echo "  adbg logcat dual log - View and save HostOS and GuestOS logcat."
+
+    echo -e "\n[*] Press CTRL+C when you want to finish."
+    echo -e "Press Enter to continue..."
+    read dummy
+
+    # Log file
+    hostLogFile=_adbg_host_logcat_$TIMESTAMP.log
+    guestLogFile=_adbg_guest_logcat_$TIMESTAMP.log
+
+    if [ $argc -eq 1 ]; then
+        adb shell adb logcat | python ./coloredlogcat.py
+    elif [ $argc -eq 2 ]; then
+        # adbg logcat log
+        if [ $arg2 = 'log' ]; then
+            adb shell adb logcat | tee $guestLogFile | python coloredlogcat.py
+        # adbg logcat dual
+        elif [ $arg2 = 'dual' ]; then
+
+            # FIX
+            # When coloredlogcat.py is used both window, the first windows crashs.
+            # Now only GustOS is highlighted.
+
+            if [ $PLATFORM = 'linux-gnu' ]; then
+                echo "[+] Launch HostOS logcat."
+                x-terminal-emulator -T HostOS  -e "adb logcat" &
+                #x-terminal-emulator -T HostOS  -e "adb logcat | python coloredlogcat.py" &
+                echo "[+] Launch GuestOS lgocat"
+                #x-terminal-emulator -T GuestOS -e "adb shell adb logcat" &
+                x-terminal-emulator -T GuestOS -e "adb shell adb logcat | python coloredlogcat.py" &
+            elif [ $PLATFORM = 'darwin13' ]; then
+                echo "[+] Launch HostOS logcat."
+                osascript -e 'tell app "Terminal" to do script "adb logcat"'
+                echo "[+] Launch GuestOS logcat"
+                osascript -e 'tell app "Terminal" to do script "adb shell adb logcat"'
+            elif [ $PLATFORM = 'cygwin' ]; then
+                echo "[+] Launch HostOS logcat."
+                mintty.exe -t HostOS  -e ./.run_hostos_logcat_in_color.sh &
+                echo "[+] Launch GuestOS logcat"
+                mintty.exe -t GuestOS  -e ./.run_guestos_logcat_in_color.sh &
+            else
+                echo "[-] Not supporting platform (Linux, MAC OS X, Cygwin)"
+            fi
+        fi
+    elif [ $argc -eq 3 ]; then
+        # adbg logcat dual log
+        if [ $arg3 = 'log' ]; then
+            if [ $PLATFORM = 'linux-gnu' ]; then
+                echo "[+] Launch HostOS logcat."
+                x-terminal-emulator -T HostOS  -e "adb logcat | tee $hostLogFile " &
+                echo "[+] Launch GuestOS logcat"
+                x-terminal-emulator -T GuestOS -e "adb shell adb logcat | tee $guestLogFile | python coloredlogcat.py" &
+            elif [ $PLATFORM = 'darwin13' ]; then
+                echo "[-] Not implemented yet in this {$PLATFORM} platform."
+                echo -e "\t- I don't know how to pass the current directory path to the script on mac."
+            elif [ $PLATFORM = 'cygwin' ]; then
+                # Cygin : timestamp problem : ^M added. Why ?
+                # http://stackoverflow.com/questions/8228047/adding-timestamp-to-a-filename-with-mv-in-bash
+                echo "[+] Launch HostOS logcat."
+                mintty.exe -t HostOS  -e ./.run_hostos_logcat_in_color_with_logging.sh &
+                echo "[+] Launch GuestOS logcat"
+                mintty.exe -t GuestOS  -e ./.run_guestos_logcat_in_color_with_logging.sh &
+            else
+                echo "[-] Not supporting platform (Linux, MAC OS X, Cygwin)"
+            fi
+        fi
+    fi
+fi
+
+# check_file
+if [ $arg1 = 'check_file' ]; then
+    if [ $argc -le 1 ]; then
+        echo "[-] adbg check_file host"
+        echo "[-] adbg check_file guest"
+        f_exit
+    else
+        echo "[+] adbg check_file $2"
+    fi
+
+    echo "[+] Remove and recreate output folder : $OUTPUT_BASE"
+    \rm -rf $OUTPUT_BASE  2>/dev/null
+    mkdir $OUTPUT_BASE
+
+    OUTPUT_RAW=$OUTPUT_BASE/${arg2}_raw.txt
+    OUTPUT_FILE=$OUTPUT_BASE/${arg2}_output.txt
+
+    echo -e "\n[+] Dump raw file list from $arg2"
+    if [ $arg2 = 'host' ]; then
+        adb shell ls -l -R > $OUTPUT_RAW
+    elif [ $arg2 = 'guest' ]; then
+        #adb shell adb shell ls -l -R
+        adb shell adb shell ls -l -R >$OUTPUT_RAW
+    fi
+
+    echo -e "\n[+] Check sticky bit." > $OUTPUT_FILE
+    grep '[d][r-][w-][xsStT-][r-][w-][xsStT-][r-][w][xsStT-]' $OUTPUT_RAW >> $OUTPUT_FILE
+
+    echo -e "\n[+] Check SUID/SGID executable." >> $OUTPUT_FILE
+    grep '[r-][w-][sStT][r-][w-].[r-][w-]' $OUTPUT_RAW >> $OUTPUT_FILE
+    grep '[r-][w-].[r-][w-][sStT][r-][w-]' $OUTPUT_RAW >> $OUTPUT_FILE
+
+    echo -e "\n[+] Check world-writable file permission."  >> $OUTPUT_FILE
+    grep '^d[rwx-]\{7\}w' $OUTPUT_RAW                 >> $OUTPUT_FILE
+
+    echo -e "\n[+] Check others group write permission."   >> $OUTPUT_FILE
+    grep '[^l][r-][w-][xsStT-][r-][w-][xsStT-][r-][w][xsStT-]' $OUTPUT_RAW>> $OUTPUT_FILE
+
+    echo -e "\n[+] Check others group read permisison." >> $OUTPUT_FILE
+    grep '[^l][r-][w-][xsStT-][r-][w-][xsStT-][r][w-][xsStT-]' $OUTPUT_RAW >> $OUTPUT_FILE
+
+fi
+
+################################################################################
+# From this, adbg scrip itself is used.
+################################################################################
+
+# root
+
+if [ $arg1 = 'root' ]; then
+    if [ $argc -le 0 ]; then
+        echo -e "[-] Check usage :"
+        echo " adbg root"
+        f_exit
+    else
+        echo "[+] adbg root"
+
+        echo -e "\n[*] Check /system mount."
+        adb shell adb shell mount |grep system
+
+        echo -e "\n[*] Remount /system as RW."
+        adb shell adb shell mount -o rw,remount /system
+
+        echo "[*] Check /system mount."
+        adb shell adb shell mount |grep system
+
+        echo -e "[*] Remove old su file"
+        adb shell adb shell rm /system/xbin/su  > /dev/null 2>&1
+
+        echo -e "\n[+] Push /system/xbin/su."
+        ./adbg push ./root/su /system/xbin/su
+        adb shell adb shell chown root.root /system/xbin/su
+        adb shell adb shell chmod 06755 /system/xbin/su
+
+        echo "[*] Check /system/xbin/su."
+        adb shell adb shell ls -al /system/xbin/su
+
+        echo -e "\n[+] Install SuperSu."
+        ./adbg install ./root/SuperSu.apk
+
+        echo -e "\n[*] Remount /system as RO."
+#       adb shell adb shell mount -o ro,remount /system
+
+        ./adbg push ./root/a/system/app/Superuser.apk /system/app
+        ./adbg push ./root/a/system/etc/install-recovery.sh /system/etc
+        ./adbg push ./root/a/system/xbin/daemonsu /system/xbin/daemonsu
+        adb shell adb shell chown root.root /system/xbin/daemonsu
+        adb shell adb shell chmod 6755 /system/xbin/daemonsu
+
+        ./adbg push ./root/a/system/xbin/su /system/xbin/su
+        adb shell adb shell chown root.root /system/etc/install-recovery.sh
+        adb shell adb shell chmod 6755 /system/etc/install-recovery.sh
+        adb shell adb shell /system/etc/install-recovery.sh
+
+        echo "[*] Check /system mount."
+        adb shell adb shell mount |grep system
+    fi
+fi
+
+
+# Exit : cleanup
+f_exit
